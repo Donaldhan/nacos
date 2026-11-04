@@ -1,0 +1,1 @@
+单机模式，使用是NamespaceController
