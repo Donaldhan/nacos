@@ -46,6 +46,7 @@ import java.util.Properties;
 /**
  * Config Impl.
  *
+ *
  * @author Nacos
  */
 @SuppressWarnings("PMD.ServiceOrDaoClassShouldEndWithImplRule")
