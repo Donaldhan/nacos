@@ -123,10 +123,19 @@ com.alibaba.nacos.core.remote.HealthCheckRequestHandler
 ## 订阅服务请求处理器
 com.alibaba.nacos.naming.remote.rpc.handler.SubscribeServiceRequestHandler
 
+[//]: # (TODO)
+
 ## 服务查询请求处理器
 
+[//]: # (TODO)
 com.alibaba.nacos.naming.remote.rpc.handler.ServiceQueryRequestHandler
 
 ## 会员报告处理器
 com.alibaba.nacos.core.cluster.remote.MemberReportHandler
+com.alibaba.nacos.core.cluster.remote.MemberReportHandler.handle
+com.alibaba.nacos.core.cluster.ServerMemberManager.update
+
+更新集群成员最新信息，并通知集群成员变更监听器
+
+[//]: # (TODO)
 
