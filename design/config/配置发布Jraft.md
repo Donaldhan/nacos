@@ -80,8 +80,6 @@ com.alibaba.nacos.persistence.repository.embedded.operate.BaseDatabaseOperate.up
 
 ConfigDataChangeEvent
 com.alibaba.nacos.config.server.service.dump.DumpService.handleConfigDataChange
-
-[//]: # (TODO)
 com.alibaba.nacos.config.server.service.dump.EmbeddedDumpService.init
 
 
@@ -95,27 +93,63 @@ com.alibaba.nacos.config.server.service.dump.EmbeddedDumpService.EmbeddedDumpSer
 这个dump的处理与外部存储的dump是一致的，包含dump所有配置及灰度配置，
 配置历史数据清理ExternalDumpService第一个服务ip清理，**EmbeddedDumpService单例或集群leader可清理**
 
+具体dump的时机参见
+
+[derby+raft模式下dump的时机](derby+raft模式下dump的时机.md) 
+
 com.alibaba.nacos.config.server.service.dump.DumpService.DumpService
 com.alibaba.nacos.config.server.service.dump.processor.DumpProcessor.process
 
 com.alibaba.nacos.config.server.service.dump.DumpService.dumpOperate
 
 
-[//]: # (TODO)
-canExecute()（EmbeddedDumpService L167-L175）只在 derby+raft 集群下要求
-protocol.isLeader(CONFIG_MODEL_RAFT_GROUP)，
-而它只约束"会写库的后台任务"（历史清理）。
-所有只读的 dump 重建通道都在每个节点跑——这个取舍是对的：
+### 订阅leader事件leader
+[derby+raft模式下dump的时机](derby+raft模式下dump的时机.md)
+
+1. dump监听leader产生，leader产生式，leader节点和follow节点会发布RaftEvent；
+2. JRaftProtocol处理RaftEvent，写协议元数据；
+3. 观察监听写协议元数据，则执行观察业务逻辑**update**
+
+com.alibaba.nacos.config.server.service.dump.EmbeddedDumpService.init
+com.alibaba.nacos.consistency.ProtocolMetaData.subscribe
+com.alibaba.nacos.consistency.ProtocolMetaData.MetaData.subscribe
+
+leader节点和follow节点会发布RaftEvent
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onLeaderStart
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onStartFollowing
+
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.init
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.injectProtocolMetaData
+
+com.alibaba.nacos.consistency.ProtocolMetaData.MetaData.put
+com.alibaba.nacos.consistency.ProtocolMetaData.ValueItem.setData
+com.alibaba.nacos.common.utils.Observable.notifyObservers
+com.alibaba.nacos.common.utils.Observer.update
+
+
+### 定时清除历史数据
+
+
+[配置发布follower如何leader保持一致](配置发布follower如何leader保持一致.md)
+
+配置历史数据清理ExternalDumpService第一个服务ip清理，**EmbeddedDumpService单例或集群leader可清理**
 清理是全局唯一动作，不该重复；dump 是本地动作，必须重复。
 
 
 
+leader发起清除历史配置写请求，raft集群其他节点执行清除SQL，完成一致性的历史配置清除操作；
+
+com.alibaba.nacos.config.server.service.dump.DumpService.ConfigHistoryClear.run
+com.alibaba.nacos.config.server.service.dump.DefaultHistoryConfigCleaner.cleanHistoryConfig
+com.alibaba.nacos.config.server.service.repository.embedded.EmbeddedHistoryConfigInfoPersistServiceImpl.removeConfigHistory
+com.alibaba.nacos.persistence.repository.embedded.EmbeddedPaginationHelperImpl.updateLimit
+com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.update
 
 
+# 快照备份与恢复
 
-# 
+初始化快照操作器
 
-[//]: # (TODO)
 com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.init
 com.alibaba.nacos.core.distributed.raft.JRaftProtocol.addRequestProcessors
 com.alibaba.nacos.core.distributed.raft.JRaftServer.createMultiRaftGroup
@@ -128,9 +162,10 @@ com.alibaba.nacos.core.persistence.DerbySnapshotOperation.DerbySnapshotOperation
 
 
 # 定时快照数据
+定时生成配置快照数据, 使用的是Derby引擎级备份机制
 
-[//]: # (TODO)
 本节点 snapshotTimer 定时 1800s，首次随机化到 900~1350s
+
 com.alipay.sofa.jraft.core.NodeImpl.init
 com.alipay.sofa.jraft.core.NodeImpl.handleSnapshotTimeout
 com.alipay.sofa.jraft.core.NodeImpl.doSnapshot
@@ -144,11 +179,18 @@ com.alipay.sofa.jraft.core.StateMachineAdapter.onSnapshotSave
 
 com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onSnapshotSave
 com.alibaba.nacos.core.persistence.DerbySnapshotOperation.onSnapshotSave
+com.alibaba.nacos.core.persistence.DerbySnapshotOperation.doDerbyBackup
 
+[Derby定时快照配置数据](Derby定时快照配置数据.md)
 
 # 启动是从快照加载
 
-[//]: # (TODO)
+[Derby快照恢复数据](Derby快照恢复数据.md)
+
+启动时，则从加载快照，实际是将快照数据恢复到Derby数据库（**将备份文件拷贝到Derby数据目录**）； 快照加 raftlog 恢复，保证数据一致
+
+[配置发布follower如何leader保持一致](配置发布follower如何leader保持一致.md)
+
 onSnapshotLoad 节点启动加载本地最近快照
 SnapshotExecutorImpl.init() 里 snapshotStorage.open() 拿到快照
 com.alipay.sofa.jraft.core.NodeImpl.init
@@ -158,6 +200,20 @@ com.alipay.sofa.jraft.core.FSMCallerImpl.onSnapshotLoad
 com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onSnapshotLoad
 com.alibaba.nacos.core.persistence.DerbySnapshotOperation.onSnapshotLoad
 
+com.alibaba.nacos.core.persistence.DerbySnapshotOperation.doDerbyRestoreFromBackup
+
+com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.restoreDerby
+com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.doDerbyClean
+com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.initialize
+
+DerbyLoadEvent:没有相关的处理器，处理这个事件
+
+
+## raft日志重放
+
+[Raft日志重放](Raft日志重放.md)
+
+[//]: # (TODO)
 
 
 #  derby+raft 集群下，启动是清楚derby数据
@@ -166,22 +222,20 @@ com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.init
 com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.cleanAndReopenDerby
 com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.doDerbyClean
 
-# 
-com.alibaba.nacos.core.persistence.DerbySnapshotOperation.doDerbyRestoreFromBackup
-
-
-# 快照恢复
-com.alibaba.nacos.persistence.datasource.LocalDataSourceServiceImpl.restoreDerby
-
-
-
-# 添加处理器到jraft协议
-com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.init
 
 # 数据导入
+解析配置文件，raft一致性写
+com.alibaba.nacos.config.server.controller.ConfigOpsController.importDerby
 com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.dataImport
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.writeAsync
+com.alibaba.nacos.core.distributed.raft.JRaftServer.commit
 
-com.alibaba.nacos.core.distributed.raft.JRaftProtocol.addRequestProcessors
+com.alibaba.nacos.common.notify.NotifyCenter.publishEvent(com.alibaba.nacos.common.notify.Event)
+
+DerbyImportEvent
+目前没有发布DerbyImportEvent事件的相关处理逻辑
+
+
 
 # 查询配置
 直接从底层磁盘文件加载配置

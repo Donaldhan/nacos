@@ -6,6 +6,9 @@
 
 [配置发布Jraft](/design/config/配置发布Jraft.md)
 
+
+**集群模式下，元数据处理逻辑，持久化只有服务，没有服务对应的元数据和服务实例元数据，通过InstanceMetadataProcessor和ServiceMetadataProcessor处理，在状态机定时持久化快照和启动时进行加载，与配置模式一致**
+
 1. 定时快照数据
 
 [//]: # (TODO)
