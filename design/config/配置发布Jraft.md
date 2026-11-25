@@ -102,6 +102,37 @@ com.alibaba.nacos.config.server.service.dump.processor.DumpProcessor.process
 
 com.alibaba.nacos.config.server.service.dump.DumpService.dumpOperate
 
+com.alibaba.nacos.config.server.service.repository.embedded.EmbeddedConfigInfoPersistServiceImpl.findConfigInfo(java.lang.String, java.lang.String, java.lang.String)
+com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.queryOne(java.lang.String, java.lang.Class<R>)
+com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.innerRead
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.getData
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.aGetData
+com.alibaba.nacos.core.distributed.raft.JRaftServer.get
+com.alibaba.nacos.core.distributed.raft.JRaftServer.readFromLeader
+
+**dump的配置是从leader直接查询的**
+
+### 全量dump
+
+**dump的配置是从leader直接查询的**
+
+com.alibaba.nacos.config.server.service.dump.processor.DumpProcessor.process
+com.alibaba.nacos.config.server.service.dump.processor.DumpAllProcessor.process
+
+com.alibaba.nacos.config.server.service.dump.DumpService.dumpOperate
+com.alibaba.nacos.config.server.service.dump.DumpChangeConfigWorker.run
+
+
+
+com.alibaba.nacos.config.server.service.repository.embedded.EmbeddedConfigInfoPersistServiceImpl.findConfigInfo(java.lang.String, java.lang.String, java.lang.String)
+com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.queryOne(java.lang.String, java.lang.Class<R>)
+com.alibaba.nacos.core.persistence.DistributedDatabaseOperateImpl.innerRead
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.getData
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.aGetData
+com.alibaba.nacos.core.distributed.raft.JRaftServer.get
+com.alibaba.nacos.core.distributed.raft.JRaftServer.readFromLeader
+
+
 
 ### 订阅leader事件leader
 [derby+raft模式下dump的时机](derby+raft模式下dump的时机.md)
@@ -213,7 +244,106 @@ DerbyLoadEvent:没有相关的处理器，处理这个事件
 
 [Raft日志重放](Raft日志重放.md)
 
-[//]: # (TODO)
+[Raft日志重放-log&commit索引来源](Raft日志重放-log&commit索引来源.md)
+
+快照加载完，会抬高水位；
+
+
+com.alipay.sofa.jraft.core.NodeImpl.init
+```java
+// NodeImpl.init()  L1012 → L1026
+if (!initFSMCaller(new LogId(0, 0))) { ... }     // ① lastAppliedIndex := 0
+...
+if (!initSnapshotStorage()) { ... }              // ② 内部会加载本地快照
+final Status st = this.logManager.checkConsistency();   // ③
+```
+com.alipay.sofa.jraft.core.NodeImpl.initFSMCaller
+
+
+
+重放起点被抬高到这里
+com.alipay.sofa.jraft.core.FSMCallerImpl.doSnapshotLoad
+
+```java
+/ FSMCallerImpl.doSnapshotLoad()  L710-L730
+if (!this.fsm.onSnapshotLoad(reader)) {                    // → NacosStateMachine → DerbySnapshotOperation
+    done.run(new Status(-1, "StateMachine onSnapshotLoad failed"));
+    setError(new RaftException(ERROR_TYPE_STATE_MACHINE, ESTATEMACHINE, "StateMachine onSnapshotLoad failed"));
+    return;                                                 // ★失败即让节点进 ERROR
+}
+...
+this.fsm.onConfigurationCommitted(conf);                   // L725 顺带恢复集群配置
+this.lastCommittedIndex.set(meta.getLastIncludedIndex());   // L727
+this.lastAppliedIndex.set(meta.getLastIncludedIndex());     // L728 ★重放起点被抬高到这里
+this.lastAppliedTerm = meta.getLastIncludedTerm();          // L729
+done.run(Status.OK());                                      // L730 → onSnapshotLoadDone
+```
+
+com.alipay.sofa.jraft.entity.RaftOutter.SnapshotMeta.SnapshotMeta()
+
+对齐集群commitIndex 
+com.alipay.sofa.jraft.core.NodeImpl.LeaderStableClosure.run
+com.alipay.sofa.jraft.core.BallotBox.commitAt
+
+重发日志
+
+com.alipay.sofa.jraft.core.FSMCallerImpl.doCommitted
+com.alipay.sofa.jraft.core.IteratorImpl.next
+
+先从内存加载日志，如果没有则从磁盘加载
+com.alipay.sofa.jraft.storage.impl.LogManagerImpl.getEntry
+com.alipay.sofa.jraft.storage.impl.RocksDBLogStorage.getEntry
+
+
+#### Raft日志重放-log&commit索引来源
+[Raft日志重放-log&commit索引来源](Raft日志重放-log&commit索引来源.md)
+
+FSMCallerImpl
+写 lastAppliedIndex到快照文件
+com.alipay.sofa.jraft.core.FSMCallerImpl.doSnapshotSave
+com.alipay.sofa.jraft.storage.snapshot.SnapshotExecutorImpl.onSnapshotSaveDone
+
+
+抬高水位点
+
+Replicator.installSnapshot
+com.alipay.sofa.jraft.core.Replicator.installSnapshot
+
+
+**集群节点落后的话**
+[Raft集群commit索引落后](Raft集群commit索引落后.md)  
+
+[Raft选举及落后节点复制日志](Raft选举及落后节点复制日志.md)
+
+[Raft落后节点追日志](Raft落后节点追日志.md)
+
+
+ReplicatorGroupImpl.checkReplicator  
+com.alipay.sofa.jraft.core.Replicator.start
+com.alipay.sofa.jraft.core.Replicator.onRpcReturned
+
+处理日志请求
+com.alipay.sofa.jraft.core.NodeImpl.handleAppendEntriesRequest
+
+### 关键点
+
+1. **`lastAppliedIndex` 不持久化**（`NodeImpl.init` L1012 传 `new LogId(0,0)`）——这是"leader 和 follower 都必须重放"的根本原因，也是 jraft 不需要维护"apply 位点"这种额外持久化状态的代价。
+
+2. **快照加载与日志重放在同一条线程上串行**（`FSMCallerImpl.runApplyTask` 的 `TaskType.SNAPSHOT_LOAD` 与 `TaskType.COMMITTED` 共用一个 disruptor 单 handler）。所以"装完快照才开始重放"是**天然有序**的，不需要额外同步——这是 `DerbySnapshotOperation` 敢做整库替换的安全前提。
+
+3. **重放没有独立代码路径**：`doCommitted` 对"实时新提交"和"重启重放"完全一致，唯一区别是入参 `lastAppliedIndex` 离 `committedIndex` 有多远。理解这一点，就不会去找"重放在哪个类里"这种不存在的答案。
+
+4. **Nacos 的清库与 jraft 恢复顺序严格咬合**：`DistributedDatabaseOperateImpl.init()` L192 `cleanAndReopenDerby()` → L214 `addRequestProcessors` → `JRaftServer.createMultiRaftGroup` → `NodeImpl.init` → 本地快照恢复 → 重放。先清空、后覆盖、再补日志，所以"不信任任何本地残留"是成立的。
+
+5. **`writeLock` 挡的是读请求，不是 apply**：`DerbySnapshotOperation.onSnapshotLoad` L123 持写锁，而 `onApply`（L523）、`onRequest`（L474）持读锁。因为 apply 与 snapshot load 在同一条 FSM 线程串行，写锁不是用来防自己的，是用来防止**客户端读请求在整库替换的中间态上拿到半截数据**。
+
+6. **重放会顺带重建缓存，快照恢复不会**：`onApply` 的非导入分支 L537 `PersistenceExecutor.executeEmbeddedDump(...)` 会跑 `EmbeddedApplyHook`，`EmbeddedConfigDumpApplyHook.afterApply` 从 `WriteRequest.extendInfo` 还原 `ConfigDumpEvent` 并发布 → `DumpConfigHandler` dump 到磁盘/内存缓存。日志重放时 extendInfo 是随日志条目一起来的，所以缓存能重建。而 `onSnapshotLoad` 只发 `DerbyLoadEvent`（L148，无订阅者）——**整库替换后没有任何缓存重建动作**。这解释了两类不一致窗口的来源不同。
+
+7. **follower 不需要写入流量也能完成重放**：心跳分支 L1987 就会推进 commit。所以 3 节点集群里单独重启一个 follower，几秒内数据即追平（前提是快照/日志够用）。
+
+8. **`setSnapshot` 故意保留上次快照点之后的日志**（LogManagerImpl L637-L647，注释原文）——保证 follower 还能按日志追赶，避免"leader 刚存完快照就把自己和 follower 都逼到只能传快照"。
+
+---
 
 
 #  derby+raft 集群下，启动是清楚derby数据
