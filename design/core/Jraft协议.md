@@ -58,8 +58,46 @@ com.alibaba.nacos.core.distributed.raft.JRaftServer.getLeader
 com.alipay.sofa.jraft.RouteTable.selectLeader
 
 
+## 当前节点是否为leader
+判断是不是leader都是基于底层的Raft机制，判断节点是否是leader以及是否ready
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.isLeader
+com.alibaba.nacos.core.distributed.raft.JRaftServer.findNodeByGroup
+com.alipay.sofa.jraft.core.NodeImpl.isLeader()
+
+## 协议是否ready
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.isReady
+com.alibaba.nacos.core.distributed.raft.JRaftServer.isReady
+com.alibaba.nacos.core.distributed.raft.JRaftServer.getLeader
+com.alipay.sofa.jraft.RouteTable.selectLeader
+
+
+## raft leader事件
+成为leader或follower时，会抛出RaftEvent，JRaftProtocol更新raft集群leader状态，这是EmbeddedDumpService就可以执行相关的dump操作
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onLeaderStart
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onStartFollowing
+
+
+RaftEvent
+
+
+com.alibaba.nacos.core.distributed.raft.JRaftProtocol.init
+com.alibaba.nacos.config.server.service.dump.EmbeddedDumpService.init
+
+
+
+
+## 集群状态机配置变更
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onConfigurationCommitted
+
+## 集群状态机错误处理
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onError
+
+## leader 停止
+com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onLeaderStop
+
 ## 集群节点变更
-[//]: # (TODO)
+
+**当前节点变更只支持移除节点操作，扩容节点当前暂不支持**
 
 [Jraft Leader选举及成员变更](Jraft Leader选举及成员变更.md)   
 
@@ -69,6 +107,11 @@ com.alibaba.nacos.core.distributed.raft.JRaftServer.peerChange
 com.alibaba.nacos.core.distributed.raft.JRaftMaintainService.execute(java.util.Map<java.lang.String,java.lang.String>)
 com.alibaba.nacos.core.distributed.raft.JRaftServer.findNodeByGroup
 com.alibaba.nacos.core.distributed.raft.JRaftMaintainService.single
+
+
+###  集群成员节点状态
+com.alibaba.nacos.naming.core.DistroMapper.onEvent
+
 
 
 # JRaftServer
@@ -188,4 +231,10 @@ com.alibaba.nacos.core.distributed.raft.NacosStateMachine.onApply
 
 
 
-libaba.nacos.core.distributed.raft.JRaftProtocol.memberChange
+
+
+# 集群统一开关控制
+[SwitchManager作用](/design/naming/SwitchManager作用.md)
+com.alibaba.nacos.naming.misc.SwitchManager.onApply
+com.alibaba.nacos.naming.misc.SwitchManager.update(com.alibaba.nacos.naming.misc.SwitchDomain)
+com.alibaba.nacos.naming.misc.SwitchManager.onRequest
